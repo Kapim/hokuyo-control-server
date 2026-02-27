@@ -1,0 +1,56 @@
+<launch>
+  <arg name="host" default="0.0.0.0" />
+  <arg name="port" default="8080" />
+
+  <arg name="cmd_vel_topic" default="/mobile_base/commands/velocity" />
+  <arg name="lidar_topic" default="/scan" />
+  <arg name="camera_topic" default="/usb_cam/image_raw/compressed" />
+  <arg name="camera_encoding" default="compressed" />
+  <arg name="faces_topic" default="/detected_faces" />
+  <arg name="detect_markers" default="true" />
+  <arg name="marker_min_interval" default="0.2" />
+  <arg name="aruco_dict_name" default="DICT_4X4_50" />
+
+  <arg name="battery_topic" default="/battery_state" />
+  <arg name="battery_mode" default="battery_state" />
+  <arg name="max_speed" default="0.2" />
+  <arg name="max_linear_speed" default="$(arg max_speed)" />
+  <arg name="max_angular_speed" default="0.5" />
+  <arg name="hold_cmd_vel" default="true" />
+  <arg name="cmd_vel_hold_rate" default="10.0" />
+  <arg name="led1_topic" default="/mobile_base/commands/led1" />
+  <arg name="led2_topic" default="/mobile_base/commands/led2" />
+  <arg name="sound_topic" default="/robotsound" />
+  <arg name="tts_mode" default="say_script" />
+  <arg name="kobuki_sound_topic" default="/mobile_base/commands/sound" />
+
+  <node pkg="hokuyo_control_server"
+        type="robot_http_server_indigo.py"
+        name="robot_http_server_indigo"
+        output="screen">
+    <param name="host" value="$(arg host)" />
+    <param name="port" value="$(arg port)" />
+
+    <param name="cmd_vel_topic" value="$(arg cmd_vel_topic)" />
+    <param name="lidar_topic" value="$(arg lidar_topic)" />
+    <param name="camera_topic" value="$(arg camera_topic)" />
+    <param name="camera_encoding" value="$(arg camera_encoding)" />
+    <param name="faces_topic" value="$(arg faces_topic)" />
+    <param name="detect_markers" value="$(arg detect_markers)" />
+    <param name="marker_min_interval" value="$(arg marker_min_interval)" />
+    <param name="aruco_dict_name" value="$(arg aruco_dict_name)" />
+
+    <param name="battery_topic" value="$(arg battery_topic)" />
+    <param name="battery_mode" value="$(arg battery_mode)" />
+    <param name="max_speed" value="$(arg max_speed)" />
+    <param name="max_linear_speed" value="$(arg max_linear_speed)" />
+    <param name="max_angular_speed" value="$(arg max_angular_speed)" />
+    <param name="hold_cmd_vel" value="$(arg hold_cmd_vel)" />
+    <param name="cmd_vel_hold_rate" value="$(arg cmd_vel_hold_rate)" />
+    <param name="led1_topic" value="$(arg led1_topic)" />
+    <param name="led2_topic" value="$(arg led2_topic)" />
+    <param name="sound_topic" value="$(arg sound_topic)" />
+    <param name="tts_mode" value="$(arg tts_mode)" />
+    <param name="kobuki_sound_topic" value="$(arg kobuki_sound_topic)" />
+  </node>
+</launch>

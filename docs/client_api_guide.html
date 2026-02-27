@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RobotHttpClient API - Jednoduchý návod</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #4b5563;
+      --line: #e5e7eb;
+      --accent: #0f766e;
+      --code-bg: #0b1020;
+      --code-text: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1, h2, h3 { line-height: 1.25; margin-top: 0; }
+    h1 { font-size: 2rem; margin-bottom: 8px; }
+    h2 { margin-top: 28px; font-size: 1.4rem; }
+    p { margin: 8px 0; }
+    .muted { color: var(--muted); }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      margin: 14px 0;
+    }
+    code {
+      background: #eef2ff;
+      border-radius: 6px;
+      padding: 2px 6px;
+      font-family: Consolas, Menlo, Monaco, monospace;
+      font-size: 0.95em;
+    }
+    pre {
+      margin: 10px 0 0;
+      padding: 12px;
+      border-radius: 10px;
+      background: var(--code-bg);
+      color: var(--code-text);
+      overflow-x: auto;
+      border: 1px solid #1f2937;
+    }
+    pre code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+    }
+    .ok {
+      display: inline-block;
+      background: #ecfdf5;
+      color: #065f46;
+      border: 1px solid #a7f3d0;
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 0.9rem;
+      margin-top: 6px;
+    }
+    ul { margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>RobotHttpClient API</h1>
+    <p class="muted">Jednoduchý návod pro práci v Pythonu. Cíl: co nejrychleji to rozběhnout.</p>
+
+    <div class="card">
+      <h2>0) Příklady</h2>
+      <p>Spusť ze složky steam.</p>
+      <pre><code>python3 example_client_usage.py --url http://localhost:8080 --linear 0 --angular 0
+python3 example_camera_viewer.py --url http://localhost:8080
+      </code></pre>
+      <span class="ok">Tip: Hodnoty u parametrů linear a angular lze využít pro hýbání s robotem (linear dopředu, angular zatáčení). Vhodné hodnoty jsou např. 0.2</span>
+    </div>
+
+    <div class="card">
+      <h2>1) Nejdřív import a připojení</h2>
+      <p>Spusť ze složky steam.</p>
+      <pre><code>import os
+import sys
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.join(ROOT, "..", "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+from http_api_client import RobotHttpClient
+
+client = RobotHttpClient("http://127.0.0.1:8080")</code></pre>
+      <span class="ok">Tip: jakmile vám bude všechno fungovat v simulátoru, dostanete přístup na reálného robota</span>
+    </div>
+
+    <div class="card">
+      <h2>2) Nejjednodušší test</h2>
+      <pre><code>print(client.health())</code></pre>
+      <p>Když to funguje, dostaneš JSON s <code>ok: true</code>.</p>
+    </div>
+
+    <h2>3) Ovládání pohybu</h2>
+    <div class="card">
+      <h3>Poslat rychlost</h3>
+      <pre><code># dopředu
+client.send_cmd_vel(0.2, 0.0)
+
+# zastavit
+client.send_cmd_vel(0.0, 0.0)
+
+# couvání + otáčení doprava
+client.send_cmd_vel(-0.1, -0.4)</code></pre>
+      <p class="muted">Parametry: <code>linear_x</code> (m/s), <code>angular_z</code> (rad/s).</p>
+    </div>
+
+    <div class="card">
+      <h3>Zjistit poslední drženou rychlost</h3>
+      <pre><code>vel = client.get_velocity()
+print(vel)</code></pre>
+    </div>
+
+    <h2>4) Senzory</h2>
+    <div class="card">
+      <h3>Lidar</h3>
+      <pre><code>scan = client.get_lidar()
+print(scan["data"]["ranges"][:10])</code></pre>
+    </div>
+
+    <div class="card">
+      <h3>Vyhodnocení překážekj</h3>
+      <pre><code># varianta 1: pošli vlastní lidar data
+scan = client.get_lidar().get("data")
+analysis = client.analyze_lidar(scan)
+print(analysis)
+
+# varianta 2: klient si lidar načte sám
+report = client.get_obstacle_report()
+print(report)</code></pre>
+      <p class="muted">Vrací jen jednoduchý slovník se vzdálenostmi: <code>front</code>, <code>front_left</code>, <code>front_right</code>, <code>left</code>, <code>right</code>, <code>back</code>.</p>
+    </div>
+
+    <div class="card">
+      <h3>Kamera</h3>
+      <pre><code>cam = client.get_camera()
+print(cam["data"].keys())</code></pre>
+      <p class="muted">Data obrazu jsou v <code>data_base64</code>.</p>
+    </div>
+
+    <div class="card">
+      <h3>Detekce tváří / markerů</h3>
+      <pre><code>print(client.get_faces())
+print(client.get_markers())</code></pre>
+    </div>
+
+    <div class="card">
+      <h3>Baterie</h3>
+      <pre><code>print(client.get_battery())</code></pre>
+    </div>
+
+    <h2>5) LED a zvuky</h2>
+    <div class="card">
+      <h3>LED</h3>
+      <pre><code># LED1 na zelenou
+print(client.set_led(1, "GREEN"))
+
+# LED2 na červenou
+print(client.set_led(2, "RED"))
+
+print(client.get_led())</code></pre>
+      <p class="muted">Barvy: <code>BLACK</code>, <code>GREEN</code>, <code>ORANGE</code>, <code>RED</code>.</p>
+    </div>
+
+    <div class="card">
+      <h3>Kobuki zvuky</h3>
+      <pre><code>print(client.play_kobuki_sound("BUTTON"))
+print(client.play_kobuki_sound("ERROR"))
+print(client.get_sound())</code></pre>
+      <p class="muted">Možnosti: <code>ON</code>, <code>OFF</code>, <code>RECHARGE</code>, <code>BUTTON</code>, <code>ERROR</code>, <code>CLEANINGSTART</code>, <code>CLEANINGEND</code>.</p>
+    </div>
+
+    <div class="card">
+      <h3>Syntéza řeči (TTS)</h3>
+      <pre><code>print(client.say("Hello world"))
+print(client.get_tts())</code></pre>
+      <p class="muted">Na Indigo serveru to volá <code>rosrun sound_play say.py</code>.</p>
+    </div>
+
+    <h2>6) Mini příklad "jeď a zastav se před překážkou"</h2>
+    <div class="card">
+      <pre><code>import time
+
+SAFE = 0.5
+
+while True:
+    report = client.get_obstacle_report()
+    front = report.get("front")
+
+    if front is None:
+        continue
+    if front < SAFE:
+        client.send_cmd_vel(0.0, 0.0)
+        print("STOP: překážka", front)
+        break
+    else:
+        client.send_cmd_vel(0.15, 0.0)
+
+    time.sleep(0.1)</code></pre>
+    </div>
+
+    <div class="card">
+      <h2>7) Přehled metod</h2>
+      <ul>
+        <li><code>health()</code></li>
+        <li><code>send_cmd_vel(linear_x, angular_z)</code></li>
+        <li><code>get_velocity()</code></li>
+        <li><code>get_lidar()</code>, <code>analyze_lidar(scan_data)</code>, <code>get_obstacle_report()</code></li>
+        <li><code>get_camera()</code>, <code>get_faces()</code>, <code>get_markers()</code>, <code>get_battery()</code></li>
+        <li><code>set_led(led_index, value)</code>, <code>get_led()</code></li>
+        <li><code>play_kobuki_sound(value)</code>, <code>get_sound()</code></li>
+        <li><code>say(text, command=1)</code>, <code>get_tts()</code></li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>
