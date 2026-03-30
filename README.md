@@ -11,10 +11,10 @@ ROS HTTP bridge se sjednocenym API pro:
   - payload: `{ "linear_x": 0.2, "angular_z": 0.4 }`
 - `GET /sensors/lidar`
 - `GET /sensors/camera`
-- `GET /faces`
+- `GET /objects`
 - `GET /battery`
 - `GET /markers` (QR + ArUco detekce z kamery)
-- `GET /velocity` (posledni latched `cmd_vel` drzeny serverem)
+- `GET /velocity` (posledni aplikovany `cmd_vel`)
 - `POST /led` (Kobuki LED1/LED2)
 - `GET /led`
 - `POST /sound` (jen `kobuki_msgs/Sound`)
@@ -22,19 +22,30 @@ ROS HTTP bridge se sjednocenym API pro:
 - `POST /tts` (syntéza řeči přes `rosrun sound_play say.py`)
 - `GET /tts`
 
-## Face data format
+## Object data format
 
-Endpoint `/faces` vraci:
+Endpoint `/objects` vraci posledni zpravu z topicu `/results` typu `std_msgs/String`.
+JSON je ulozene v `msg.data`, ale API z nej vraci jen pole `detections`:
 
 ```json
 {
-  "detected_faces": [
-    { "x": 120, "y": 90, "width": 64, "height": 64 }
+  "data": [
+    {
+      "center_x": 0.4731,
+      "center_y": 0.7161,
+      "width": 0.2717,
+      "height": 0.4145,
+      "score": 0.8889358639717102,
+      "class": 0,
+      "class_name": "person"
+    }
   ]
 }
 ```
 
-To odpovida poli `face_detector_msgs/Face[] detected_faces`.
+Server vraci posledni data jen po omezenou dobu (`objects_max_age`, default `1.0s`).
+Pokud neprijde nova zprava na `objects_topic` dele nez timeout, endpoint vrati prazdne pole.
+Souřadnice i rozměry jsou normalizovane do rozsahu `0..1` pro obraz 640x480.
 
 ## Spusteni - Indigo (real robot)
 
@@ -55,14 +66,16 @@ Vychozi topics:
 - `lidar_topic=/scan`
 - `camera_topic=/usb_cam/image_raw/compressed`
 - `camera_encoding=compressed`
-- `faces_topic=/detected_faces`
+- `objects_topic=/results`
+- `objects_max_age=1.0` (maximalni stari posledni prijate zpravy pro `/objects`)
 - `battery_topic=/battery_state`
-- `battery_mode=battery_state` (`sensor_msgs/BatteryState`)
+- `battery_mode=laptop_sysfs` (cteni z `/sys/class/power_supply/BAT*` na notebooku)
 - `max_speed=0.2` (spolecny fallback limit)
 - `max_linear_speed` (default `max_speed`)
 - `max_angular_speed=0.5`
-- `hold_cmd_vel=true` (periodicky republish posledniho cmd_vel)
+- `hold_cmd_vel=true` (periodicky publish na `cmd_vel`)
 - `cmd_vel_hold_rate=10.0` (Hz)
+- `cmd_vel_timeout=1.0` (sekundy bez noveho `POST /cmd_vel` -> server posila nulovou rychlost)
 - `led1_topic=/mobile_base/commands/led1`
 - `led2_topic=/mobile_base/commands/led2`
 - `sound_topic=/robotsound`
@@ -96,11 +109,12 @@ Vychozi topics:
 - `max_linear_speed` (default `max_speed`)
 - `max_angular_speed=0.5`
 - `battery_mode=float32` (`std_msgs/Float32`, hodnota 0..1)
-- `hold_cmd_vel=true` (periodicky republish posledniho cmd_vel)
+- `hold_cmd_vel=true` (periodicky publish na `cmd_vel`)
 - `cmd_vel_hold_rate=10.0` (Hz)
+- `cmd_vel_timeout=1.0` (sekundy bez noveho `POST /cmd_vel` -> server posila nulovou rychlost)
 - `detect_markers=false` (lze zapnout i pro Gazebo)
 
-Noetic/Gazebo varianta vraci na `/faces` dummy data pro testy.
+Noetic/Gazebo varianta vraci na `/objects` dummy data pro testy.
 
 ## Jednotny klient
 
@@ -114,10 +128,11 @@ client.send_cmd_vel(0.2, 0.1)
 print(client.get_lidar())
 print("obstacle_report =", client.get_obstacle_report())
 print(client.get_camera())
-print(client.get_faces())
+print(client.get_objects())
 print(client.get_battery())
 print(client.get_markers())
 print(client.get_velocity())
+client.send_cmd_vel(0.0, 0.0)
 client.set_led(1, "GREEN")
 client.play_kobuki_sound("BUTTON")
 client.say("Ahoj svete")
@@ -172,6 +187,7 @@ Polling endpoint vraci posledni detekci markeru:
 ```
 
 Klient pak muze periodicky volat `get_markers()` a rozhodovat, jestli robot vidi cilovy kod.
+Na starem Ubuntu 14.04 / Pythonu 2.7 bez `cv2.aruco` bezi jednodussi fallback, ktery vraci kandidaty s `id = -1` a jejich rohy.
 
 ## Lidar helpery v klientovi
 
@@ -184,7 +200,8 @@ Vystup obsahuje:
 
 ## Velocity endpoint (`/velocity`)
 
-Vraci posledni latched command, ktery server drzi a periodicky republikuje na `cmd_vel`.
+Vraci posledni aplikovany command na `cmd_vel`. Pokud vyprsi `cmd_vel_timeout`,
+server prepne posledni rychlost na nulu.
 
 ```json
 {
@@ -235,9 +252,11 @@ POST /tts
 
 Pozn.: V `tts_mode=say_script` se předává text do `say.py`; `command` je přijat pro kompatibilitu API.
 
-## Cmd_vel hold (Indigo)
+## Cmd_vel watchdog
 
-Indigo server po `POST /cmd_vel` drzi posledni rychlost a periodicky ji posila dal, dokud neprijde novy command.
+Server publikuje na `cmd_vel` periodicky (`hold_cmd_vel`, `cmd_vel_hold_rate`), ale jen po dobu,
+kdy klient pravidelne posila nove `POST /cmd_vel` (v klientovi `RobotHttpClient` se to dela interne po `send_cmd_vel`).
+Po vyprseni `cmd_vel_timeout` server automaticky publikuje nulovou rychlost (`0, 0`).
 
 ## Poznamky
 

@@ -17,6 +17,7 @@
   <arg name="battery_mode" default="float32" />
   <arg name="hold_cmd_vel" default="true" />
   <arg name="cmd_vel_hold_rate" default="10.0" />
+  <arg name="cmd_vel_timeout" default="1.0" />
 
   <node pkg="hokuyo_control_server"
         type="robot_http_server_noetic_gazebo.py"
@@ -40,5 +41,6 @@
     <param name="battery_mode" value="$(arg battery_mode)" />
     <param name="hold_cmd_vel" value="$(arg hold_cmd_vel)" />
     <param name="cmd_vel_hold_rate" value="$(arg cmd_vel_hold_rate)" />
+    <param name="cmd_vel_timeout" value="$(arg cmd_vel_timeout)" />
   </node>
 </launch>

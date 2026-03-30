@@ -32,18 +32,20 @@ def main():
     lidar_topic = rospy.get_param("~lidar_topic", "/scan")
     camera_topic = rospy.get_param("~camera_topic", "/usb_cam/image_raw/compressed")
     camera_encoding = rospy.get_param("~camera_encoding", "compressed")
-    faces_topic = rospy.get_param("~faces_topic", "/detected_faces")
+    objects_topic = rospy.get_param("~objects_topic", "/results")
+    objects_max_age = float(rospy.get_param("~objects_max_age", 1.0))
     detect_markers = _as_bool(rospy.get_param("~detect_markers", True))
     marker_min_interval = float(rospy.get_param("~marker_min_interval", 0.2))
     aruco_dict_name = rospy.get_param("~aruco_dict_name", "DICT_4X4_50")
 
     battery_topic = rospy.get_param("~battery_topic", "/battery_state")
-    battery_mode = rospy.get_param("~battery_mode", "battery_state")
+    battery_mode = rospy.get_param("~battery_mode", "laptop_sysfs")
     max_speed = float(rospy.get_param("~max_speed", 0.2))
     max_linear_speed = float(rospy.get_param("~max_linear_speed", max_speed))
     max_angular_speed = float(rospy.get_param("~max_angular_speed", 0.5))
     hold_cmd_vel = _as_bool(rospy.get_param("~hold_cmd_vel", True))
     cmd_vel_hold_rate = float(rospy.get_param("~cmd_vel_hold_rate", 10.0))
+    cmd_vel_timeout = float(rospy.get_param("~cmd_vel_timeout", 1.0))
     led1_topic = rospy.get_param("~led1_topic", "/mobile_base/commands/led1")
     led2_topic = rospy.get_param("~led2_topic", "/mobile_base/commands/led2")
     sound_topic = rospy.get_param("~sound_topic", "/robotsound")
@@ -57,8 +59,9 @@ def main():
         camera_encoding=camera_encoding,
         battery_topic=battery_topic,
         battery_mode=battery_mode,
-        faces_topic=faces_topic,
-        dummy_faces=False,
+        objects_topic=objects_topic,
+        objects_max_age=objects_max_age,
+        dummy_objects=False,
         detect_markers=detect_markers,
         marker_min_interval=marker_min_interval,
         aruco_dict_name=aruco_dict_name,
@@ -69,6 +72,7 @@ def main():
         tts_mode=tts_mode,
         hold_cmd_vel=hold_cmd_vel,
         cmd_vel_hold_rate=cmd_vel_hold_rate,
+        cmd_vel_timeout=cmd_vel_timeout,
         max_linear_speed=max_linear_speed,
         max_angular_speed=max_angular_speed,
     )

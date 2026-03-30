@@ -41,6 +41,7 @@ def main():
     max_angular_speed = float(rospy.get_param("~max_angular_speed", 0.5))
     hold_cmd_vel = _as_bool(rospy.get_param("~hold_cmd_vel", True))
     cmd_vel_hold_rate = float(rospy.get_param("~cmd_vel_hold_rate", 10.0))
+    cmd_vel_timeout = float(rospy.get_param("~cmd_vel_timeout", 1.0))
 
     state = RobotState(
         cmd_vel_topic=cmd_vel_topic,
@@ -49,8 +50,8 @@ def main():
         camera_encoding=camera_encoding,
         battery_topic=battery_topic,
         battery_mode=battery_mode,
-        faces_topic=None,
-        dummy_faces=True,
+        objects_topic=None,
+        dummy_objects=True,
         detect_markers=detect_markers,
         marker_min_interval=marker_min_interval,
         aruco_dict_name=aruco_dict_name,
@@ -61,6 +62,7 @@ def main():
         tts_mode="disabled",
         hold_cmd_vel=hold_cmd_vel,
         cmd_vel_hold_rate=cmd_vel_hold_rate,
+        cmd_vel_timeout=cmd_vel_timeout,
         max_linear_speed=max_linear_speed,
         max_angular_speed=max_angular_speed,
     )

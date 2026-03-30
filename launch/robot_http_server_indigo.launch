@@ -6,18 +6,20 @@
   <arg name="lidar_topic" default="/scan" />
   <arg name="camera_topic" default="/usb_cam/image_raw/compressed" />
   <arg name="camera_encoding" default="compressed" />
-  <arg name="faces_topic" default="/detected_faces" />
+  <arg name="objects_topic" default="/results" />
+  <arg name="objects_max_age" default="1.0" />
   <arg name="detect_markers" default="true" />
   <arg name="marker_min_interval" default="0.2" />
   <arg name="aruco_dict_name" default="DICT_4X4_50" />
 
   <arg name="battery_topic" default="/battery_state" />
-  <arg name="battery_mode" default="battery_state" />
+  <arg name="battery_mode" default="laptop_sysfs" />
   <arg name="max_speed" default="0.2" />
   <arg name="max_linear_speed" default="$(arg max_speed)" />
   <arg name="max_angular_speed" default="0.5" />
   <arg name="hold_cmd_vel" default="true" />
   <arg name="cmd_vel_hold_rate" default="10.0" />
+  <arg name="cmd_vel_timeout" default="1.0" />
   <arg name="led1_topic" default="/mobile_base/commands/led1" />
   <arg name="led2_topic" default="/mobile_base/commands/led2" />
   <arg name="sound_topic" default="/robotsound" />
@@ -35,7 +37,8 @@
     <param name="lidar_topic" value="$(arg lidar_topic)" />
     <param name="camera_topic" value="$(arg camera_topic)" />
     <param name="camera_encoding" value="$(arg camera_encoding)" />
-    <param name="faces_topic" value="$(arg faces_topic)" />
+    <param name="objects_topic" value="$(arg objects_topic)" />
+    <param name="objects_max_age" value="$(arg objects_max_age)" />
     <param name="detect_markers" value="$(arg detect_markers)" />
     <param name="marker_min_interval" value="$(arg marker_min_interval)" />
     <param name="aruco_dict_name" value="$(arg aruco_dict_name)" />
@@ -47,6 +50,7 @@
     <param name="max_angular_speed" value="$(arg max_angular_speed)" />
     <param name="hold_cmd_vel" value="$(arg hold_cmd_vel)" />
     <param name="cmd_vel_hold_rate" value="$(arg cmd_vel_hold_rate)" />
+    <param name="cmd_vel_timeout" value="$(arg cmd_vel_timeout)" />
     <param name="led1_topic" value="$(arg led1_topic)" />
     <param name="led2_topic" value="$(arg led2_topic)" />
     <param name="sound_topic" value="$(arg sound_topic)" />

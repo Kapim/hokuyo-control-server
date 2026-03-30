@@ -4,7 +4,9 @@
 from __future__ import print_function
 
 import base64
+import glob
 import json
+import os
 import subprocess
 import threading
 import time
@@ -12,7 +14,7 @@ import time
 import rospy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import BatteryState, CompressedImage, Image, LaserScan
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, String
 
 try:
     import cv2
@@ -30,13 +32,31 @@ def _clamp(value, minimum, maximum):
 
 
 def _points_to_polygon(points):
-    if points is None or np is None:
+    if points is None:
         return []
     try:
-        shaped = np.array(points).reshape((-1, 2))
-        return [[int(pt[0]), int(pt[1])] for pt in shaped]
+        if np is not None:
+            shaped = np.array(points).reshape((-1, 2))
+            return [[int(pt[0]), int(pt[1])] for pt in shaped]
+        polygon = []
+        for item in points:
+            if hasattr(item, "__iter__") and not isinstance(item, (str, bytes)):
+                values = list(item)
+                if len(values) >= 2 and not hasattr(values[0], "__iter__"):
+                    polygon.append([int(values[0]), int(values[1])])
+                else:
+                    for sub_item in values:
+                        if hasattr(sub_item, "__iter__") and not isinstance(sub_item, (str, bytes)):
+                            sub_values = list(sub_item)
+                            if len(sub_values) >= 2:
+                                polygon.append([int(sub_values[0]), int(sub_values[1])])
+        return polygon
     except Exception:
         return []
+
+
+OBJECTS_IMAGE_WIDTH = 640.0
+OBJECTS_IMAGE_HEIGHT = 480.0
 
 
 class RobotState(object):
@@ -48,8 +68,8 @@ class RobotState(object):
         camera_encoding,
         battery_topic,
         battery_mode,
-        faces_topic=None,
-        dummy_faces=False,
+        objects_topic=None,
+        dummy_objects=False,
         detect_markers=False,
         marker_min_interval=0.2,
         aruco_dict_name="DICT_4X4_50",
@@ -60,8 +80,10 @@ class RobotState(object):
         tts_mode="disabled",
         hold_cmd_vel=False,
         cmd_vel_hold_rate=10.0,
+        cmd_vel_timeout=1.0,
         max_linear_speed=None,
         max_angular_speed=None,
+        objects_max_age=1.0,
     ):
         self.cmd_vel_pub = rospy.Publisher(cmd_vel_topic, Twist, queue_size=10)
 
@@ -69,7 +91,11 @@ class RobotState(object):
         self._latest_lidar = None
         self._latest_camera = None
         self._latest_battery = None
-        self._latest_faces = []
+        self._battery_mode = str(battery_mode or "")
+        self._laptop_battery_dir = None
+        self._latest_objects = None
+        self._latest_objects_stamp = 0.0
+        self._objects_max_age = max(0.0, float(objects_max_age))
         self._latest_markers = {
             "stamp": 0.0,
             "qr_codes": [],
@@ -104,24 +130,27 @@ class RobotState(object):
         self._latest_kobuki_sound = None
         self._hold_cmd_vel = bool(hold_cmd_vel)
         self._cmd_vel_hold_rate = max(1.0, float(cmd_vel_hold_rate))
+        self._cmd_vel_timeout = max(0.0, float(cmd_vel_timeout))
         self._max_linear_speed = float(max_linear_speed) if max_linear_speed is not None else None
         self._max_angular_speed = float(max_angular_speed) if max_angular_speed is not None else None
         self._last_cmd_linear = 0.0
         self._last_cmd_angular = 0.0
+        self._last_cmd_stamp = 0.0
+        self._cmd_vel_timed_out = False
         self._cmd_vel_timer = None
 
-        self._dummy_faces = dummy_faces
-        self._dummy_face_counter = 0
+        self._dummy_objects = dummy_objects
+        self._dummy_object_counter = 0
         self._marker_min_interval = max(0.0, float(marker_min_interval))
         self._last_marker_update = 0.0
-        self._marker_detection_enabled = bool(detect_markers and cv2 is not None and np is not None)
+        self._marker_detection_enabled = bool(detect_markers and cv2 is not None)
         self._qr_detector = None
         self._aruco_dictionary = None
 
         if detect_markers and cv2 is None:
             rospy.logwarn("Marker detection requested, but OpenCV (cv2) is not available.")
         if detect_markers and np is None:
-            rospy.logwarn("Marker detection requested, but numpy is not available.")
+            rospy.loginfo("Marker detection fallback enabled without numpy; QR/legacy contour detection will still run.")
 
         if self._marker_detection_enabled:
             self._qr_detector = self._build_qr_detector()
@@ -139,16 +168,13 @@ class RobotState(object):
             rospy.Subscriber(battery_topic, BatteryState, self._battery_state_cb, queue_size=1)
         elif battery_mode == "float32":
             rospy.Subscriber(battery_topic, Float32, self._battery_float_cb, queue_size=1)
+        elif battery_mode == "laptop_sysfs":
+            rospy.loginfo("Battery mode laptop_sysfs enabled for /battery endpoint")
         else:
             rospy.logwarn("Unknown battery mode '%s', battery endpoint will be empty", battery_mode)
 
-        if faces_topic and not dummy_faces:
-            try:
-                from face_detector_msgs.msg import DetectedFaces
-
-                rospy.Subscriber(faces_topic, DetectedFaces, self._faces_cb, queue_size=1)
-            except Exception as exc:
-                rospy.logwarn("Cannot subscribe face topic (%s). Faces endpoint will return empty list.", exc)
+        if objects_topic and not dummy_objects:
+            rospy.Subscriber(objects_topic, String, self._objects_cb, queue_size=1)
 
         if led1_topic or led2_topic:
             try:
@@ -186,7 +212,7 @@ class RobotState(object):
             except Exception as exc:
                 rospy.logwarn("Cannot initialize kobuki_msgs/Sound publisher (%s).", exc)
 
-        if self._hold_cmd_vel:
+        if self._hold_cmd_vel or self._cmd_vel_timeout > 0.0:
             period = 1.0 / self._cmd_vel_hold_rate
             self._cmd_vel_timer = rospy.Timer(rospy.Duration(period), self._cmd_vel_timer_cb)
 
@@ -205,21 +231,35 @@ class RobotState(object):
             }
 
     def _camera_compressed_cb(self, msg):
-        encoded = base64.b64encode(msg.data)
+        payload_bytes = msg.data
+        payload_format = msg.format
+        marker_payload = None
+        if self._marker_detection_enabled or cv2 is not None:
+            bgr = self._decode_compressed_to_bgr(msg.data)
+            if bgr is not None and self._marker_detection_enabled:
+                marker_payload = self._detect_markers_in_image(bgr, msg.header.stamp.to_sec())
+            if bgr is not None:
+                objects = self._current_objects()
+                detections = objects.get("detections", []) if objects else []
+                if detections:
+                    try:
+                        bgr_overlay = self._draw_objects_rectangles(bgr, detections)
+                        ok, encoded_image = cv2.imencode(".jpg", bgr_overlay)
+                        if ok:
+                            payload_bytes = encoded_image.tobytes()
+                            payload_format = "jpeg"
+                    except Exception:
+                        pass
+
+        encoded = base64.b64encode(payload_bytes)
         if not isinstance(encoded, str):
             encoded = encoded.decode("ascii")
-
-        marker_payload = None
-        if self._marker_detection_enabled:
-            bgr = self._decode_compressed_to_bgr(msg.data)
-            if bgr is not None:
-                marker_payload = self._detect_markers_in_image(bgr, msg.header.stamp.to_sec())
 
         with self._lock:
             self._latest_camera = {
                 "stamp": msg.header.stamp.to_sec(),
                 "frame_id": msg.header.frame_id,
-                "format": msg.format,
+                "format": payload_format,
                 "encoding": "compressed",
                 "data_base64": encoded,
             }
@@ -227,15 +267,27 @@ class RobotState(object):
                 self._latest_markers = marker_payload
 
     def _camera_raw_cb(self, msg):
-        encoded = base64.b64encode(msg.data)
+        raw_bytes = msg.data
+        marker_payload = None
+        if self._marker_detection_enabled or cv2 is not None:
+            bgr = self._decode_raw_to_bgr(msg)
+            if bgr is not None and self._marker_detection_enabled:
+                marker_payload = self._detect_markers_in_image(bgr, msg.header.stamp.to_sec())
+            if bgr is not None:
+                objects = self._current_objects()
+                detections = objects.get("detections", []) if objects else []
+                if detections and msg.encoding in ("bgr8", "rgb8"):
+                    try:
+                        overlay = self._draw_objects_rectangles(bgr, detections)
+                        if msg.encoding == "rgb8":
+                            overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+                        raw_bytes = overlay.tobytes()
+                    except Exception:
+                        pass
+
+        encoded = base64.b64encode(raw_bytes)
         if not isinstance(encoded, str):
             encoded = encoded.decode("ascii")
-
-        marker_payload = None
-        if self._marker_detection_enabled:
-            bgr = self._decode_raw_to_bgr(msg)
-            if bgr is not None:
-                marker_payload = self._detect_markers_in_image(bgr, msg.header.stamp.to_sec())
 
         with self._lock:
             self._latest_camera = {
@@ -271,27 +323,229 @@ class RobotState(object):
                 "percentage": _clamp(float(msg.data), 0.0, 1.0),
             }
 
-    def _faces_cb(self, msg):
-        faces = []
-        for face in msg.detected_faces:
-            faces.append(
-                {
-                    "x": int(face.x),
-                    "y": int(face.y),
-                    "width": int(face.width),
-                    "height": int(face.height),
-                }
-            )
-        with self._lock:
-            self._latest_faces = faces
+    def _read_text_file(self, path):
+        try:
+            with open(path, "r") as f:
+                return f.read().strip()
+        except Exception:
+            return None
 
-    def _dummy_face_payload(self):
-        # Oscillating one synthetic face for testing API consumers.
-        self._dummy_face_counter += 1
-        size = 64 + (self._dummy_face_counter % 4) * 8
-        x = 120 + (self._dummy_face_counter % 5) * 10
-        y = 90 + (self._dummy_face_counter % 3) * 12
-        return [{"x": x, "y": y, "width": size, "height": size}]
+    def _read_float_file(self, path):
+        raw = self._read_text_file(path)
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except Exception:
+            return None
+
+    def _find_laptop_battery_dir(self):
+        if self._laptop_battery_dir and os.path.isdir(self._laptop_battery_dir):
+            return self._laptop_battery_dir
+        for candidate in sorted(glob.glob("/sys/class/power_supply/BAT*")):
+            if not os.path.isdir(candidate):
+                continue
+            supply_type = self._read_text_file(os.path.join(candidate, "type"))
+            if supply_type is None or supply_type.lower() == "battery":
+                self._laptop_battery_dir = candidate
+                return candidate
+        return None
+
+    def _read_laptop_battery(self):
+        battery_dir = self._find_laptop_battery_dir()
+        if battery_dir is None:
+            return None
+
+        capacity_pct = self._read_float_file(os.path.join(battery_dir, "capacity"))
+        percentage = None
+        if capacity_pct is not None:
+            percentage = _clamp(capacity_pct / 100.0, 0.0, 1.0)
+
+        voltage_uv = self._read_float_file(os.path.join(battery_dir, "voltage_now"))
+        current_ua = self._read_float_file(os.path.join(battery_dir, "current_now"))
+        charge_mah = self._read_float_file(os.path.join(battery_dir, "charge_now"))
+        capacity_mah = self._read_float_file(os.path.join(battery_dir, "charge_full"))
+        if charge_mah is None:
+            charge_mah = self._read_float_file(os.path.join(battery_dir, "energy_now"))
+        if capacity_mah is None:
+            capacity_mah = self._read_float_file(os.path.join(battery_dir, "energy_full"))
+
+        status = self._read_text_file(os.path.join(battery_dir, "status"))
+
+        return {
+            "stamp": time.time(),
+            "source": "laptop_sysfs",
+            "battery_name": os.path.basename(battery_dir),
+            "voltage": (voltage_uv / 1000000.0) if voltage_uv is not None else None,
+            "current": (current_ua / 1000000.0) if current_ua is not None else None,
+            "charge": (charge_mah / 1000000.0) if charge_mah is not None else None,
+            "capacity": (capacity_mah / 1000000.0) if capacity_mah is not None else None,
+            "percentage": percentage,
+            "power_supply_status": status,
+        }
+
+    def _objects_cb(self, msg):
+        objects = self._parse_objects_payload(msg.data)
+        if objects is None:
+            return
+        stamp = rospy.get_time()
+        if stamp <= 0.0:
+            stamp = time.time()
+        with self._lock:
+            self._latest_objects = objects
+            self._latest_objects_stamp = float(stamp)
+
+    def _empty_objects_payload(self):
+        return {"timestamp": None, "recv_timestamp": None, "detections": []}
+
+    def _dummy_objects_payload(self):
+        # Oscillating one synthetic object for testing API consumers.
+        self._dummy_object_counter += 1
+        size = 64 + (self._dummy_object_counter % 4) * 8
+        center_x = 120 + (self._dummy_object_counter % 5) * 10
+        center_y = 90 + (self._dummy_object_counter % 3) * 12
+        return {
+            "timestamp": int(time.time() * 1e9),
+            "recv_timestamp": int(time.time() * 1e9),
+            "detections": [
+                {
+                    "center_x": _clamp(float(center_x) / OBJECTS_IMAGE_WIDTH, 0.0, 1.0),
+                    "center_y": _clamp(float(center_y) / OBJECTS_IMAGE_HEIGHT, 0.0, 1.0),
+                    "width": _clamp(float(size) / OBJECTS_IMAGE_WIDTH, 0.0, 1.0),
+                    "height": _clamp(float(size) / OBJECTS_IMAGE_HEIGHT, 0.0, 1.0),
+                    "score": 1.0,
+                    "class": 0,
+                    "class_name": "person",
+                }
+            ],
+        }
+
+    def _parse_objects_payload(self, raw_data):
+        try:
+            parsed = json.loads(raw_data)
+        except Exception:
+            rospy.logwarn_throttle(10.0, "Received invalid JSON on objects topic.")
+            return None
+        if not isinstance(parsed, dict):
+            rospy.logwarn_throttle(10.0, "Objects topic JSON must be an object.")
+            return None
+
+        detections = parsed.get("detections", [])
+        if not isinstance(detections, list):
+            detections = []
+        normalized_detections = []
+        for detection in detections:
+            if not isinstance(detection, dict):
+                continue
+            normalized = dict(detection)
+            bbox = normalized.get("bbox", [])
+            if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+                x1 = float(bbox[0])
+                y1 = float(bbox[1])
+                x2 = float(bbox[2])
+                y2 = float(bbox[3])
+                normalized["center_x"] = _clamp(((x1 + x2) * 0.5) / OBJECTS_IMAGE_WIDTH, 0.0, 1.0)
+                normalized["center_y"] = _clamp(((y1 + y2) * 0.5) / OBJECTS_IMAGE_HEIGHT, 0.0, 1.0)
+                normalized["width"] = _clamp(max(0.0, x2 - x1) / OBJECTS_IMAGE_WIDTH, 0.0, 1.0)
+                normalized["height"] = _clamp(max(0.0, y2 - y1) / OBJECTS_IMAGE_HEIGHT, 0.0, 1.0)
+            else:
+                center_x = normalized.get("center_x")
+                center_y = normalized.get("center_y")
+                width = normalized.get("width")
+                height = normalized.get("height")
+                if center_x is not None:
+                    normalized["center_x"] = _clamp(float(center_x), 0.0, 1.0)
+                else:
+                    normalized["center_x"] = None
+                if center_y is not None:
+                    normalized["center_y"] = _clamp(float(center_y), 0.0, 1.0)
+                else:
+                    normalized["center_y"] = None
+                if width is not None:
+                    normalized["width"] = _clamp(max(0.0, float(width)), 0.0, 1.0)
+                else:
+                    normalized["width"] = None
+                if height is not None:
+                    normalized["height"] = _clamp(max(0.0, float(height)), 0.0, 1.0)
+                else:
+                    normalized["height"] = None
+            normalized.pop("bbox", None)
+            normalized_detections.append(normalized)
+
+        parsed["detections"] = normalized_detections
+        return parsed
+
+    def _copy_objects_payload(self, objects):
+        if objects is None:
+            return None
+        copied = dict(objects)
+        detections = copied.get("detections", [])
+        copied_detections = []
+        for detection in detections:
+            if not isinstance(detection, dict):
+                continue
+            copied_detections.append(dict(detection))
+        copied["detections"] = copied_detections
+        return copied
+
+    def _current_objects(self):
+        with self._lock:
+            objects = self._copy_objects_payload(self._latest_objects)
+            latest_objects_stamp = float(self._latest_objects_stamp)
+
+        if self._dummy_objects:
+            return self._dummy_objects_payload()
+        if objects is None:
+            return self._empty_objects_payload()
+        if self._objects_max_age <= 0.0:
+            return objects
+
+        now = rospy.get_time()
+        if now <= 0.0:
+            now = time.time()
+        if latest_objects_stamp <= 0.0 or (float(now) - latest_objects_stamp) > self._objects_max_age:
+            return self._empty_objects_payload()
+        return objects
+
+    def _draw_objects_rectangles(self, bgr_image, detections):
+        if cv2 is None or bgr_image is None:
+            return bgr_image
+        overlay = bgr_image.copy()
+        image_height, image_width = overlay.shape[:2]
+        for detection in detections:
+            center_x = detection.get("center_x")
+            center_y = detection.get("center_y")
+            width = detection.get("width")
+            height = detection.get("height")
+            if None in (center_x, center_y, width, height):
+                continue
+            half_width = float(width) * float(image_width) * 0.5
+            half_height = float(height) * float(image_height) * 0.5
+            x_center_px = float(center_x) * float(image_width)
+            y_center_px = float(center_y) * float(image_height)
+            x1 = int(round(_clamp(x_center_px - half_width, 0.0, float(image_width - 1))))
+            y1 = int(round(_clamp(y_center_px - half_height, 0.0, float(image_height - 1))))
+            x2 = int(round(_clamp(x_center_px + half_width, 0.0, float(image_width - 1))))
+            y2 = int(round(_clamp(y_center_px + half_height, 0.0, float(image_height - 1))))
+            if x2 <= x1 or y2 <= y1:
+                continue
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            label = detection.get("class_name")
+            score = detection.get("score")
+            if label:
+                if score is not None:
+                    label = "%s %.2f" % (label, float(score))
+                cv2.putText(
+                    overlay,
+                    str(label),
+                    (x1, max(0, y1 - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 0),
+                    1,
+                    cv2.LINE_AA,
+                )
+        return overlay
 
     def _build_qr_detector(self):
         if cv2 is None:
@@ -376,27 +630,133 @@ class RobotState(object):
         return qr_codes
 
     def _detect_aruco_markers(self, bgr_image):
-        if self._aruco_dictionary is None or cv2 is None or not hasattr(cv2, "aruco"):
+        if cv2 is None:
             return []
-        aruco = cv2.aruco
+        if self._aruco_dictionary is not None and hasattr(cv2, "aruco"):
+            aruco = cv2.aruco
+            try:
+                gray = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2GRAY)
+                if hasattr(aruco, "DetectorParameters_create"):
+                    params = aruco.DetectorParameters_create()
+                    corners, ids, _ = aruco.detectMarkers(gray, self._aruco_dictionary, parameters=params)
+                else:
+                    params = aruco.DetectorParameters()
+                    corners, ids, _ = aruco.detectMarkers(gray, self._aruco_dictionary, parameters=params)
+            except Exception:
+                corners = None
+                ids = None
+            else:
+                markers = []
+                if ids is not None:
+                    for i, marker_id in enumerate(ids.flatten().tolist()):
+                        marker_corners = _points_to_polygon(corners[i][0]) if corners is not None and len(corners) > i and len(corners[i]) > 0 else []
+                        markers.append({"id": int(marker_id), "corners": marker_corners})
+                if markers:
+                    return markers
+
+        return self._detect_aruco_markers_legacy(bgr_image)
+
+    @staticmethod
+    def _find_contours_compat(binary_image):
+        result = cv2.findContours(binary_image, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        if len(result) == 2:
+            contours, hierarchy = result
+        else:
+            _, contours, hierarchy = result
+        return contours, hierarchy
+
+    @staticmethod
+    def _order_quad_points(points):
+        if not points or len(points) != 4:
+            return []
+        pts = [(float(pt[0]), float(pt[1])) for pt in points]
+        pts_by_y = sorted(pts, key=lambda item: (item[1], item[0]))
+        top = sorted(pts_by_y[:2], key=lambda item: item[0])
+        bottom = sorted(pts_by_y[2:], key=lambda item: item[0])
+        if len(top) != 2 or len(bottom) != 2:
+            return []
+        return [top[0], top[1], bottom[1], bottom[0]]
+
+    def _detect_aruco_markers_legacy(self, bgr_image):
+        if cv2 is None:
+            return []
         try:
             gray = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2GRAY)
-            if hasattr(aruco, "DetectorParameters_create"):
-                params = aruco.DetectorParameters_create()
-                corners, ids, _ = aruco.detectMarkers(gray, self._aruco_dictionary, parameters=params)
-            else:
-                params = aruco.DetectorParameters()
-                corners, ids, _ = aruco.detectMarkers(gray, self._aruco_dictionary, parameters=params)
         except Exception:
             return []
 
-        markers = []
-        if ids is None:
-            return markers
-        for i, marker_id in enumerate(ids.flatten().tolist()):
-            marker_corners = _points_to_polygon(corners[i][0]) if corners is not None and len(corners) > i and len(corners[i]) > 0 else []
-            markers.append({"id": int(marker_id), "corners": marker_corners})
-        return markers
+        try:
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        except Exception:
+            blurred = gray
+
+        image_area = float(gray.shape[0] * gray.shape[1]) if hasattr(gray, "shape") and len(gray.shape) >= 2 else 0.0
+        if image_area <= 0.0:
+            return []
+
+        accepted = []
+        seen_centers = []
+        threshold_modes = [
+            cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+            cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU,
+        ]
+
+        for threshold_mode in threshold_modes:
+            try:
+                _, binary = cv2.threshold(blurred, 0, 255, threshold_mode)
+                contours, _ = self._find_contours_compat(binary)
+            except Exception:
+                continue
+
+            for contour in contours:
+                try:
+                    area = abs(cv2.contourArea(contour))
+                    if area < 200.0 or area > image_area * 0.5:
+                        continue
+                    perimeter = cv2.arcLength(contour, True)
+                    if perimeter <= 0.0:
+                        continue
+                    approx = cv2.approxPolyDP(contour, 0.04 * perimeter, True)
+                    if len(approx) != 4 or not cv2.isContourConvex(approx):
+                        continue
+
+                    rect = cv2.boundingRect(approx)
+                    if rect[2] <= 0 or rect[3] <= 0:
+                        continue
+                    aspect = float(rect[2]) / float(rect[3])
+                    if aspect < 0.65 or aspect > 1.35:
+                        continue
+
+                    points = approx.reshape((-1, 2)).tolist() if hasattr(approx, "reshape") else []
+                    ordered = self._order_quad_points(points)
+                    if len(ordered) != 4:
+                        continue
+
+                    center_x = sum(pt[0] for pt in ordered) / 4.0
+                    center_y = sum(pt[1] for pt in ordered) / 4.0
+                    duplicate = False
+                    for seen_x, seen_y in seen_centers:
+                        dx = center_x - seen_x
+                        dy = center_y - seen_y
+                        if (dx * dx + dy * dy) < 100.0:
+                            duplicate = True
+                            break
+                    if duplicate:
+                        continue
+
+                    seen_centers.append((center_x, center_y))
+                    accepted.append(
+                        {
+                            "id": -1,
+                            "corners": [[int(round(pt[0])), int(round(pt[1]))] for pt in ordered],
+                            "method": "legacy_contour",
+                        }
+                    )
+                except Exception:
+                    continue
+
+        accepted.sort(key=lambda item: item["corners"][0][1] if item.get("corners") else 0)
+        return accepted[:10]
 
     def _detect_markers_in_image(self, bgr_image, stamp):
         now = time.time()
@@ -414,9 +774,14 @@ class RobotState(object):
     def publish_cmd_vel(self, linear_x, angular_z):
         linear_x = self._clamp_with_limit(float(linear_x), self._max_linear_speed)
         angular_z = self._clamp_with_limit(float(angular_z), self._max_angular_speed)
+        stamp = rospy.get_time()
+        if stamp <= 0.0:
+            stamp = time.time()
         with self._lock:
             self._last_cmd_linear = linear_x
             self._last_cmd_angular = angular_z
+            self._last_cmd_stamp = float(stamp)
+            self._cmd_vel_timed_out = False
         msg = Twist()
         msg.linear.x = linear_x
         msg.angular.z = angular_z
@@ -434,6 +799,25 @@ class RobotState(object):
         with self._lock:
             linear_x = self._last_cmd_linear
             angular_z = self._last_cmd_angular
+            stamp = self._last_cmd_stamp
+            timed_out = self._cmd_vel_timed_out
+
+        if self._cmd_vel_timeout > 0.0:
+            now = rospy.get_time()
+            if now <= 0.0:
+                now = time.time()
+            if stamp <= 0.0 or (float(now) - float(stamp)) > self._cmd_vel_timeout:
+                linear_x = 0.0
+                angular_z = 0.0
+                with self._lock:
+                    self._last_cmd_linear = 0.0
+                    self._last_cmd_angular = 0.0
+                    self._cmd_vel_timed_out = True
+                if not timed_out:
+                    rospy.logwarn(
+                        "cmd_vel timeout reached (%.2fs). Publishing stop command.",
+                        self._cmd_vel_timeout,
+                    )
         msg = Twist()
         msg.linear.x = linear_x
         msg.angular.z = angular_z
@@ -515,13 +899,15 @@ class RobotState(object):
             lidar = self._latest_lidar
             camera = self._latest_camera
             battery = self._latest_battery
-            faces = list(self._latest_faces)
             markers = dict(self._latest_markers)
             led_state = dict(self._latest_led)
             last_kobuki_sound = dict(self._latest_kobuki_sound) if self._latest_kobuki_sound else None
             last_tts = dict(self._latest_tts) if self._latest_tts else None
             cmd_linear = self._last_cmd_linear
             cmd_angular = self._last_cmd_angular
+
+        if self._battery_mode == "laptop_sysfs":
+            battery = self._read_laptop_battery()
 
         velocity = {
             "source": "cmd_vel",
@@ -530,16 +916,14 @@ class RobotState(object):
             "angular": {"x": 0.0, "y": 0.0, "z": cmd_angular},
         }
 
-        if self._dummy_faces:
-            faces = self._dummy_face_payload()
+        objects = self._current_objects()
+        detections = objects.get("detections", []) if objects else []
 
         return {
             "lidar": lidar,
             "camera": camera,
             "battery": battery,
-            "faces": {
-                "detected_faces": faces,
-            },
+            "objects": detections,
             "markers": markers,
             "led": {
                 "state": led_state,
@@ -633,8 +1017,8 @@ def build_handler(state, robot_name):
                 return self._send_json(200, {"data": snap["lidar"]})
             if self.path == "/sensors/camera":
                 return self._send_json(200, {"data": snap["camera"]})
-            if self.path == "/faces":
-                return self._send_json(200, snap["faces"])
+            if self.path == "/objects":
+                return self._send_json(200, {"data": snap["objects"]})
             if self.path == "/battery":
                 return self._send_json(200, {"data": snap["battery"]})
             if self.path == "/markers":

@@ -117,12 +117,12 @@ client = RobotHttpClient("http://127.0.0.1:8080")</code></pre>
       <pre><code># dopředu
 client.send_cmd_vel(0.2, 0.0)
 
-# zastavit
-client.send_cmd_vel(0.0, 0.0)
+# změna rychlosti za jízdy
+client.send_cmd_vel(0.1, -0.3)
 
-# couvání + otáčení doprava
-client.send_cmd_vel(-0.1, -0.4)</code></pre>
-      <p class="muted">Parametry: <code>linear_x</code> (m/s), <code>angular_z</code> (rad/s).</p>
+# zastavit
+client.send_cmd_vel(0.0, 0.0)</code></pre>
+      <p class="muted">Klient po <code>send_cmd_vel</code> drží periodické posílání interně na pozadí. Pokud appka přestane běžet, server po timeoutu robota zastaví.</p>
     </div>
 
     <div class="card">
@@ -159,9 +159,10 @@ print(cam["data"].keys())</code></pre>
     </div>
 
     <div class="card">
-      <h3>Detekce tváří / markerů</h3>
-      <pre><code>print(client.get_faces())
+      <h3>Detekce objektů / markerů</h3>
+      <pre><code>print(client.get_objects())
 print(client.get_markers())</code></pre>
+      <p class="muted">`get_objects()` vrací jen pole detekcí z `/results`; každá detekce má `center_x`, `center_y`, `width` a `height` normalizované do `0..1` pro 640x480 obraz.</p>
     </div>
 
     <div class="card">
@@ -226,7 +227,7 @@ while True:
         <li><code>send_cmd_vel(linear_x, angular_z)</code></li>
         <li><code>get_velocity()</code></li>
         <li><code>get_lidar()</code>, <code>analyze_lidar(scan_data)</code>, <code>get_obstacle_report()</code></li>
-        <li><code>get_camera()</code>, <code>get_faces()</code>, <code>get_markers()</code>, <code>get_battery()</code></li>
+        <li><code>get_camera()</code>, <code>get_objects()</code>, <code>get_markers()</code>, <code>get_battery()</code></li>
         <li><code>set_led(led_index, value)</code>, <code>get_led()</code></li>
         <li><code>play_kobuki_sound(value)</code>, <code>get_sound()</code></li>
         <li><code>say(text, command=1)</code>, <code>get_tts()</code></li>

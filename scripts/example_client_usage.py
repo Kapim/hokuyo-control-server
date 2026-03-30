@@ -25,19 +25,19 @@ def main():
 
     client = RobotHttpClient(args.url)
 
-    print("health:", json.dumps(client.health(), indent=2, sort_keys=True))
-    print("cmd_vel:", json.dumps(client.send_cmd_vel(args.linear, args.angular), indent=2, sort_keys=True))
-    lidar = client.get_lidar()
-    print("lidar:", json.dumps(lidar, indent=2, sort_keys=True)[:400], "...")
-    print("obstacle_report:", json.dumps(client.get_obstacle_report(), indent=2, sort_keys=True))
-    print("camera:", json.dumps(client.get_camera(), indent=2, sort_keys=True)[:400], "...")
-    print("faces:", json.dumps(client.get_faces(), indent=2, sort_keys=True))
-    print("battery:", json.dumps(client.get_battery(), indent=2, sort_keys=True))
-    print("markers:", json.dumps(client.get_markers(), indent=2, sort_keys=True))
-    print("velocity:", json.dumps(client.get_velocity(), indent=2, sort_keys=True))
-    print("led:", json.dumps(client.get_led(), indent=2, sort_keys=True))
-    print("sound:", json.dumps(client.get_sound(), indent=2, sort_keys=True))
-    print("tts:", json.dumps(client.get_tts(), indent=2, sort_keys=True))
+#    print("health:", json.dumps(client.health(), indent=2, sort_keys=True))
+#    print("cmd_vel:", json.dumps(client.send_cmd_vel(args.linear, args.angular), indent=2, sort_keys=True))
+#    lidar = client.get_lidar()
+#    print("lidar:", json.dumps(lidar, indent=2, sort_keys=True)[:400], "...")
+#    print("obstacle_report:", json.dumps(client.get_obstacle_report(), indent=2, sort_keys=True))
+#    print("camera:", json.dumps(client.get_camera(), indent=2, sort_keys=True)[:400], "...")
+    print("objects:", json.dumps(client.get_objects(), indent=2, sort_keys=True))
+#    print("battery:", json.dumps(client.get_battery(), indent=2, sort_keys=True))
+#    print("markers:", json.dumps(client.get_markers(), indent=2, sort_keys=True))
+#    print("velocity:", json.dumps(client.get_velocity(), indent=2, sort_keys=True))
+#    print("led:", json.dumps(client.get_led(), indent=2, sort_keys=True))
+#    print("sound:", json.dumps(client.get_sound(), indent=2, sort_keys=True))
+#    print("tts:", json.dumps(client.get_tts(), indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
